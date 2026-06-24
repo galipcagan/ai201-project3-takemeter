@@ -119,6 +119,17 @@ Fine-tuning on 177 examples **did not beat the zero-shot 70B baseline** — accu
 
 It is **not** a uniform regression, though: `analysis` detection improved markedly (F1 0.73 → 0.86). The cost shows up in the confusion matrix — the model now **over-predicts `hot_take`**, swallowing 7 of 16 `reaction`s, which is what drags overall accuracy below the baseline.
 
+#### Error-pattern analysis (AI-assisted, then hand-verified)
+
+Per the AI Tool Plan in [planning.md](planning.md), I gave the full list of misclassifications to an LLM and asked it to surface systematic patterns, then verified each by re-reading the examples (I discarded one proposed pattern — "fails on long comments" — which re-reading did not support; error length was mixed). The pattern that held up is **directional**:
+
+- **Which labels are confused — the boundary the model hasn't learned: `reaction` → `hot_take`.** 7 of the 13 errors (54%) are reactions predicted as hot_takes; every other off-diagonal cell has ≤ 2. One dominant, directional failure mode.
+- **Why that boundary is hard:** it's *tone vs. structure*. The misclassified reactions are opinionated, charged banter (*"...sooner turkey go out the better"*, *"11 F-22s vs 11 entrenched kangaroos"*) — they *sound* like takes but argue no disputable football claim. The model keys on assertive tone; the label depends on whether a real claim is actually made.
+- **Labeling problem or data/boundary problem?** I re-checked the 7 misclassified reactions against the decision rule — they were labeled *consistently* (charged banter with no disputable claim = `reaction`), so this is **not annotation inconsistency**. It's the boundary being genuinely fuzzy plus too few boundary examples: with 70 `hot_take`s and limited charged-but-claimless `reaction`s, the model never learned that tone ≠ stance. A second human annotator might reasonably dispute a few of these — which is exactly why inter-annotator agreement would be informative here.
+- **What would fix it:** more labeled examples on the `reaction`/`hot_take` border — especially opinionated banter that is *not* a take — so the model learns to require a disputable claim, not just an assertive tone. A sharper operational cue in the definition (e.g., "a `hot_take` must name a specific football subject *and* make a claim about it") would help both annotators and the model.
+
+Notably, the failure mode **moved**: the 70B baseline's weak spot was `analysis`↔`hot_take`; fine-tuning largely fixed that (analysis F1 0.73 → 0.86, only 1 analysis→hot_take error) but introduced the new `reaction`→`hot_take` over-prediction. The model traded one boundary confusion for another.
+
 #### Three errors analyzed
 
 1. **`reaction` → `hot_take` (confidence 0.86):** *"Didn't stay up for this but a nice result to wake up to. Get in Australia, sooner turkey and the booing cunts go out the better."* This is celebration/banter (a `reaction`), but it carries an opinionated charge ("sooner they go out the better"), so the model read it as a take. The model latched onto *opinionated tone* as a `hot_take` signal, missing that no disputable football claim is actually argued — exactly the `reaction`/`hot_take` line we had to tighten in the planning stress-test.
@@ -133,6 +144,22 @@ I intended the model to separate the three classes by **evidence** (`analysis` v
 - But it largely keys on **assertiveness/opinionated tone** rather than the underlying *evidence* and *disputability* tests. So it tags opinionated reactions as `hot_take` (error 1), tentative-sounding analysis as `reaction`/`hot_take` (error 3), and vague gesturing as `analysis` (error 2). The distinction my taxonomy is built on — *is there real evidence, and is a real claim being made* — is more semantic than 177 examples can teach a small model, especially across the `hot_take` boundary, which even the 70B baseline found hardest.
 
 In short: fine-tuning produced a competent `analysis` detector but a tone-driven, over-eager `hot_take` classifier, and on this dataset that nets out just below a strong zero-shot baseline. The most likely path to actually beating the baseline is **more labeled data** (especially clean `hot_take`/`reaction` boundary cases), not more training on the existing 177.
+
+#### Sample classifications (fine-tuned model)
+
+Five test comments run through the fine-tuned model, with predicted label and the model's confidence:
+
+| Comment (truncated) | Predicted | Confidence | Correct? |
+| --- | --- | ---: | :-: |
+| "…attack in a 4-2-3-1 or 4-3-3, Germany even uses a crazy 3-1-6 in attack (which makes them vulnerable to counters)…" | `analysis` | 0.97 | ✅ |
+| "Talk shit get fucking dog walked you cunts" | `reaction` | 0.96 | ✅ |
+| "And made fun of RM, only to have Bernardo Silva and Cucurella snatched away from them. It's all so embarrassing." | `hot_take` | 0.88 | ✅ |
+| "Didn't stay up for this but a nice result to wake up to. Get in Australia, sooner turkey and the booing cunts go out the better." | `hot_take` | 0.86 | ❌ (true `reaction`) |
+| "Didnt we take the 424 from Hungarians actually? Their managers, like Bela Guttman, were even here to show us, I thought?" | `hot_take` | 0.65 | ❌ (true `analysis`) |
+
+**Why the first prediction is reasonable:** the comment names a specific formation (3-1-6) and gives a mechanistic consequence ("makes them vulnerable to counters") — concrete, checkable tactical reasoning, which is precisely the `analysis` definition. The model assigns it 0.97, its highest-confidence band, for the right reason.
+
+**Calibration note:** the model is confidently right on clear cases (0.96–0.97) but also confidently *wrong* on the `reaction`/`hot_take` boundary (0.86 on row 4). High confidence is not a reliable signal of correctness on the hardest boundary — relevant for any deployment that surfaces confidence to users.
 
 ## Repository
 
